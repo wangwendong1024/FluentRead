@@ -18,6 +18,14 @@ export default defineConfig({
         plugins: [vue()],
         define: {
             'process.env.VUE_APP_VERSION': JSON.stringify(packageJson.version),
+        },
+        server: {
+            port: 3000,
+            strictPort: true,
+            hmr: {
+                port: 3000,
+                protocol: 'ws'
+            }
         }
     }),
     manifest: {
