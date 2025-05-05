@@ -1,9 +1,13 @@
-import { handleTranslation, autoTranslateEnglishPage } from "./main/trans";
+import { handleTranslation, autoTranslateEnglishPage, restoreOriginalContent } from "./main/trans";
 import { cache } from "./utils/cache";
 import { constants } from "@/entrypoints/utils/constant";
 import { getCenterPoint } from "@/entrypoints/utils/common";
 import './style.css';
 import { config, configReady } from "@/entrypoints/utils/config";
+import { mountFloatingBall, unmountFloatingBall, toggleFloatingBallPosition } from "@/entrypoints/utils/floatingBall";
+import { cancelAllTranslations } from "@/entrypoints/utils/translateApi";
+import { createApp } from 'vue';
+import TranslationStatus from '@/components/TranslationStatus.vue';
 
 export default defineContentScript({
     matches: ['<all_urls>'],  // 匹配所有页面
@@ -13,8 +17,19 @@ export default defineContentScript({
         if (config.on === false) return; // 如果配置关闭，则不执行任何操作
         // 添加手动翻译事件监听器
         setupManualTranslationTriggers();
+        // 添加悬浮球快捷键事件监听器
+        setupFloatingBallHotkey();
         // 添加自动翻译事件监听器
         if (config.autoTranslate) autoTranslationEvent();
+
+        // 挂载悬浮球（如果配置未禁用）
+        if (config.disableFloatingBall !== true) {
+            // 使用配置中的位置
+            mountFloatingBall();
+        }
+        
+        // 挂载翻译状态组件
+        mountTranslationStatusComponent();
 
         cache.cleaner();    // 检测是否清理缓存
 
@@ -24,14 +39,27 @@ export default defineContentScript({
             sendResponse();
             return true;
         });
-
-        // 监听来自 popup 的消息
-        browser.runtime.onMessage.addListener((message: { type: string; }) => {
-            if (message.type === 'clearCache') {
-                // 清除所有翻译缓存
-                clearAllTranslations();
-                return Promise.resolve(true); // 返回成功响应
+        
+        // 处理悬浮球控制消息
+        browser.runtime.onMessage.addListener((message: any, sender: any, sendResponse: () => void) => {
+            if (message.type === 'toggleFloatingBall') {
+                if (message.isEnabled) {
+                    mountFloatingBall();
+                } else {
+                    unmountFloatingBall();
+                }
+                sendResponse();
+                return true;
             }
+            return false;
+        });
+        
+        // 在页面卸载时清理资源
+        window.addEventListener('beforeunload', () => {
+            // 取消所有待处理的翻译任务
+            cancelAllTranslations();
+            // 移除悬浮球
+            unmountFloatingBall();
         });
     }
 })
@@ -176,6 +204,104 @@ function setupManualTranslationTriggers() {
         }
     });
 }
+
+// 设置悬浮球快捷键
+function setupFloatingBallHotkey() {
+    // 如果快捷键设置为 "none"，则禁用快捷键
+    if (config.floatingBallHotkey === 'none') return;
+
+    // 添加全局键盘事件监听
+    let hotkeysPressed = new Set<string>();
+    let lastKeyDownTime = 0; // 用于防止按键事件重复触发
+    
+    // 开发环境标志
+    const isDev = process.env.NODE_ENV === 'development';
+    
+    // 检测操作系统类型
+    const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+    
+    // 获取当前配置的快捷键
+    const getConfiguredHotkeyParts = () => {
+        return config.floatingBallHotkey.split('+').map(key => {
+            const k = key.toLowerCase();
+            // 标准化修饰键名称
+            if (k === 'ctrl') return 'control';
+            if (k === 'option') return 'alt';
+            return k;
+        });
+    };
+    
+    if (isDev) {
+        console.log(`[FluentRead] 设置悬浮球快捷键: ${config.floatingBallHotkey}, 系统: ${isMac ? 'macOS' : '其他'}`);
+    }
+    
+    // 监听按键按下事件
+    document.addEventListener('keydown', (event) => {
+        // 防止事件重复触发（某些浏览器可能会重复触发keydown事件）
+        const now = Date.now();
+        if (now - lastKeyDownTime < 50) return;
+        lastKeyDownTime = now;
+        
+        // 记录修饰键状态
+        if (event.altKey) hotkeysPressed.add('alt');
+        if (event.ctrlKey || event.metaKey) hotkeysPressed.add('control'); // 在Mac上，metaKey是Command键
+        if (event.shiftKey) hotkeysPressed.add('shift');
+        
+        // 处理字母键
+        if (event.code && event.code.startsWith('Key')) {
+            const letter = event.code.slice(3).toLowerCase();
+            hotkeysPressed.add(letter);
+        } else if (event.key && event.key.length === 1) {
+            // 对于不是使用code属性的浏览器，使用key属性
+            hotkeysPressed.add(event.key.toLowerCase());
+        }
+        
+        // 获取当前配置的快捷键
+        const hotkeyParts = getConfiguredHotkeyParts();
+        
+        // 检查当前按下的键是否匹配配置的快捷键
+        const allKeysPressed = hotkeyParts.every(key => hotkeysPressed.has(key));
+        const noExtraModifiers = (hotkeyParts.includes('control') || !hotkeysPressed.has('control')) && 
+                                (hotkeyParts.includes('alt') || !hotkeysPressed.has('alt')) &&
+                                (hotkeyParts.includes('shift') || !hotkeysPressed.has('shift'));
+        
+        // 如果按键组合匹配配置的快捷键，且没有额外的修饰键
+        if (allKeysPressed && noExtraModifiers && !config.disableFloatingBall) {
+            // 防止事件继续传播和默认行为
+            event.preventDefault();
+            event.stopPropagation();
+            
+            // 通过自定义事件来触发翻译
+            document.dispatchEvent(new CustomEvent('fluentread-toggle-translation'));
+            
+            if (isDev) {
+                console.log('[FluentRead] 触发悬浮球翻译');
+            }
+        }
+    });
+    
+    // 监听按键释放事件
+    document.addEventListener('keyup', (event) => {
+        // 清除修饰键状态
+        if (!event.altKey) hotkeysPressed.delete('alt');
+        if (!event.ctrlKey && !event.metaKey) hotkeysPressed.delete('control');
+        if (!event.shiftKey) hotkeysPressed.delete('shift');
+        
+        // 清除字母键状态
+        if (event.code && event.code.startsWith('Key')) {
+            const letter = event.code.slice(3).toLowerCase();
+            hotkeysPressed.delete(letter);
+        } else if (event.key && event.key.length === 1) {
+            hotkeysPressed.delete(event.key.toLowerCase());
+        }
+    });
+    
+    // 页面失焦或切换标签页时，清除所有按键状态
+    window.addEventListener('blur', () => {
+        hotkeysPressed.clear();
+    });
+}
+
 // 注册自动翻译事件
 function autoTranslationEvent() {
     // 自动翻译英文页面
@@ -202,4 +328,18 @@ function clearAllTranslations() {
     cache.clean();
 
     console.log('已清除所有翻译缓存');
+}
+
+/**
+ * 挂载翻译状态组件
+ */
+function mountTranslationStatusComponent() {
+    // 创建容器元素
+    const container = document.createElement('div');
+    container.id = 'fluent-read-translation-status-container';
+    document.body.appendChild(container);
+    
+    // 创建并挂载组件
+    const app = createApp(TranslationStatus);
+    app.mount(container);
 }

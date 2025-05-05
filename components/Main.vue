@@ -46,6 +46,45 @@
     </el-col>
   </el-row>
 
+    <!-- 添加悬浮球开关 -->
+    <el-row v-if="config.on" class="margin-bottom margin-left-2em margin-top-1em">
+      <el-col :span="20" class="lightblue rounded-corner">
+        <el-tooltip class="box-item" effect="dark" content="（测试版）控制是否显示屏幕边缘的即时翻译悬浮球，用于对整个网页进行翻译" placement="top-start" :show-after="500">
+        <span class="popup-text popup-vertical-left">
+          <span class="new-feature-badge">新</span>
+          全文翻译悬浮球
+          <el-icon class="icon-margin">
+            <ChatDotRound />
+          </el-icon>
+        </span>
+        </el-tooltip>
+      </el-col>
+
+      <el-col :span="4" class="flex-end">
+        <el-switch v-model="floatingBallEnabled" inline-prompt active-text="开" inactive-text="关" />
+      </el-col>
+    </el-row>
+
+    <!-- 悬浮球快捷键选择 -->
+    <el-row v-if="config.on && floatingBallEnabled" class="margin-bottom margin-left-2em margin-top-1em">
+      <el-col :span="14" class="lightblue rounded-corner">
+        <el-tooltip class="box-item" effect="dark" content="（测试版）设置快捷键以便快速切换全文翻译状态，无需鼠标点击悬浮球" placement="top-start" :show-after="500">
+        <span class="popup-text popup-vertical-left">
+          <span class="new-feature-badge">新</span>
+          全文翻译快捷键
+          <el-icon class="icon-margin">
+            <ChatDotRound />
+          </el-icon>
+        </span>
+        </el-tooltip>
+      </el-col>
+      <el-col :span="10" class="flex-end">
+        <el-select v-model="config.floatingBallHotkey" placeholder="选择快捷键" size="small" style="width: 100%">
+          <el-option v-for="item in options.floatingBallHotkeys" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+      </el-col>
+    </el-row>
+
     <!--    翻译模式-->
     <el-row class="margin-bottom margin-left-2em">
       <el-col :span="12" class="lightblue rounded-corner">
@@ -455,13 +494,51 @@ const resetTemplate = () => {
   });
 };
 
-// 显示刷新提示
-const showRefreshTip = ref(false);
+// 悬浮球开关的计算属性
+const floatingBallEnabled = computed({
+  get: () => !config.value.disableFloatingBall,
+  set: (value) => {
+    config.value.disableFloatingBall = !value;
+    // 向所有激活的标签页发送消息
+    browser.tabs.query({}).then(tabs => {
+      tabs.forEach(tab => {
+        if (tab.id) {
+          browser.tabs.sendMessage(tab.id, { 
+            type: 'toggleFloatingBall',
+            isEnabled: value 
+          }).catch(() => {
+            // 忽略发送失败的错误（可能是页面未加载内容脚本）
+          });
+        }
+      });
+    });
+  }
+});
 
 // 监听开关变化
 const handleSwitchChange = () => {
   showRefreshTip.value = true;
 };
+
+// 处理悬浮球开关变化
+const toggleFloatingBall = (val: boolean) => {
+  // 向所有激活的标签页发送消息
+  browser.tabs.query({}).then(tabs => {
+    tabs.forEach(tab => {
+      if (tab.id) {
+        browser.tabs.sendMessage(tab.id, { 
+          type: 'toggleFloatingBall',
+          isEnabled: val 
+        }).catch(() => {
+          // 忽略发送失败的错误（可能是页面未加载内容脚本）
+        });
+      }
+    });
+  });
+};
+
+// 显示刷新提示
+const showRefreshTip = ref(false);
 
 // 刷新页面
 const refreshPage = async () => {
@@ -526,6 +603,10 @@ const refreshPage = async () => {
   margin-top: 1em;
 }
 
+.margin-top-1em {
+  margin-top: 0.5em;
+}
+
 /* 设置滚动条样式 */
 ::-webkit-scrollbar {
   width: 6px;
@@ -561,5 +642,35 @@ const refreshPage = async () => {
 .refresh-button:hover {
   background-color: #66b1ff;
   color: #fff;
+}
+
+.new-feature-badge {
+  display: inline-block;
+  font-size: 12px;
+  background-color: #f56c6c;
+  color: white;
+  padding: 1px 6px;
+  border-radius: 10px;
+  margin-right: 8px;
+  font-weight: bold;
+  animation: bounce 1s infinite alternate;
+}
+
+@keyframes pulse-glow {
+  0% {
+    box-shadow: 0 2px 8px rgba(64, 158, 255, 0.1);
+  }
+  100% {
+    box-shadow: 0 2px 12px rgba(64, 158, 255, 0.5);
+  }
+}
+
+@keyframes bounce {
+  0% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(-3px);
+  }
 }
 </style>
